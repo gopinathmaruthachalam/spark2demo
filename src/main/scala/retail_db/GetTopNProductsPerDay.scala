@@ -1,9 +1,13 @@
 package retail_db
 
 import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.sql._
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.DataFrame
+import scala.util.matching.Regex
 
 /**
-  * Created by itversity on 10/04/18.
+  * Created by Gopinath on 10/07/2018.
   * Problem Statement: Get top n products per day by revenue
   * Consider only COMPLETE and CLOSED orders
   * Output: order_date, product_name, revenue
@@ -15,7 +19,7 @@ import org.apache.spark.{SparkConf, SparkContext}
   * Writing processed data (to file system or database) - Actions
   */
 
-object GetTopNProductsPerDay {
+object Filter_Columns {
   def getTopNProductsForDay(productsForDay: (String, List[(Int, Float)]), topN: Int) = {
     productsForDay._2.sortBy(k => -k._2).take(5).map(e => (productsForDay._1, e))
   }
