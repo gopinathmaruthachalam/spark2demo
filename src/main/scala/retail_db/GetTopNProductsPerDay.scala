@@ -1,92 +1,75 @@
-package retail_db
+package bosch_test
 
-import org.apache.spark.{SparkConf, SparkContext}
+import com.typesafe.config.ConfigFactory
+import org.apache.spark.sql.SparkSession
+import spark.implicits._
 
 /**
-  * Created by itversity on 10/04/18.
-  * Problem Statement: Get top n products per day by revenue
-  * Consider only COMPLETE and CLOSED orders
-  * Output: order_date, product_name, revenue
+  * Created by Gopinath.M on 10/10/2019.
+  * Problem Statement: Fetch the columns where all the values in those columns are correctly formatted as per the requirement.
+  * Consider we have the input file in DIR: "inputBaseDir"
+  * We will save the output file in DIR: "outputBaseDir"
   * Creating Spark configuration and Spark Context
   * Reading data (from file system or database)
   * Row level transformations (filter, data cleansing and standardization)
-  * Shuffle operations (joins, aggregations, sorting etc)
-  * Row level transformations
   * Writing processed data (to file system or database) - Actions
   */
 
-object GetTopNProductsPerDay {
-  def getTopNProductsForDay(productsForDay: (String, List[(Int, Float)]), topN: Int) = {
-    productsForDay._2.sortBy(k => -k._2).take(5).map(e => (productsForDay._1, e))
-  }
+object Fileter_Col {
   def main(args: Array[String]): Unit = {
-    val conf = new SparkConf().
-      setMaster(args(0)).
-      setAppName("Get top n products per day by revenue")
-    val sc = new SparkContext(conf)
-    sc.setLogLevel("ERROR")
 
+    val props = ConfigFactory.load
+    val env = args(0)
+    val envProps = props.getConfig(env)
+
+    val spark = SparkSession.
+    builder.
+    appName("Daily Product Revenue using Data Frame Operations").
+    master(envProps.getString("execution.mode")).
+    getOrCreate
+
+    spark.conf.set("spark.sql.shuffle.partitions", "2")   
+ 
+  
     // Reading data (from file system or database)
-    // Read orders, order_items and products
 
-    val inputBaseDir = args(1)
-    val orders = sc.textFile(inputBaseDir + "/orders")
-    val orderItems = sc.textFile(inputBaseDir + "/order_items")
-    val products = sc.textFile(inputBaseDir + "/products")
+    val inputBaseDir = envProps.getString("input.base.dir")
+    val df = spark.read.csv(inputBaseDir + "phonenumbers").
+      toDF("c1", "c2", "c3", "c4","c5")
 
     // Row level transformation
-    // orders - filter and apply map to transform data
-    // "1,2013-07-25 00:00:00.0,11599,CLOSED" -> (1, "2013-07-25 00:00:00.0")
-    val ordersMap = orders.
-      filter(e => List("COMPLETE", "CLOSED").contains(e.split(",")(3))).
-      map(e => (e.split(",")(0).toInt, e.split(",")(1)))
+    // Check what are all column values are correctly formatted as per the requirement
+ 
+    val df1 = df.select(df.columns
+              .map(c=> df(c) rlike("\\(\\d{3}\\)-\\d{3}-\\d{4}|\\d{3}-\\d{3}-\\d{4}|\\d{3}-\\d{3}\\d{4}|\\d{3}\\d{3}\\d{4}")): _*)
 
-    // order_items - use map to transform the data
-    // "1,1,957,1,299.98,299.98" -> (1, (957, 299.98))
+    // df1 - use map to transform the data and type Cast
+   
+    val df2 = df1.select(df1.columns
+                         .map(c => df1(c).cast("Int")): _*)
+    val df5 = df2.select(df2.columns
+                         .map(c => sum(c)): _*)
 
-    val orderItemsMap = orderItems.
-      map(e => (e.split(",")(1).toInt, (e.split(",")(2).toInt, e.split(",")(4).toFloat)))
+    // rename are transformed column names to original column values.
+   
+    val names = df.columns
+    val df3 = df5.toDF(names: _*)
 
-    val regex = ",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)"
-    val productsMap = products.
-      map(e => (e.split(regex, -1)(0).toInt, e.split(regex, -1)(2)))
+ 
+    // We will fetch the array of columns which contain all values in proper format. 
+   
+    val filterColumns = df3.columns
+                        .map(c => (c, df3.select(c).first.getLong(0)))
+                        .filter{case (c, v) => v == df.count}
+                        .map{case (c, v) => c}
+                        .toSeq
 
-    // orders join order_items -> 364 * 1000, (1, ("2013-07-25 00:00:00.0", (957, 299.98)))
-    val ordersJoin = ordersMap.join(orderItemsMap).
-      map(e => ((e._2._1, e._2._2._1), e._2._2._2))
-    // (("2013-07-25 00:00:00.0", 957), 299.98)
-
-    // compute revenue per day per product -> 364 * 100
-    val revenuePerDayPerProductId = ordersJoin.
-      reduceByKey((curr, next) => curr + next)
-    val productIdAndRevenuePerDay = revenuePerDayPerProductId.
-      map(e => (e._1._1, (e._1._2, e._2)))
-
-    // get top n products per day -> 364 * 5
-    val productsPerDay = productIdAndRevenuePerDay.groupByKey
-    val topNProductIdsPerDay = productsPerDay.
-      flatMap(e => getTopNProductsForDay((e._1, e._2.toList), args(3).toInt)).
-      map(e => (e._2._1, (e._1, e._2._2)))
-
-    // join with products ->
-    // date, product_name and revenue
-    val topNProductsPerDay = productsMap.join(topNProductIdsPerDay).
-      map(e => {
-        ((e._2._2._1, -e._2._2._2), e._2._2._1 + "\t" + e._2._1 + "\t" + e._2._2._2)
-      }).
-      sortByKey().
-      map(e => e._2)
-    topNProductsPerDay.saveAsTextFile(args(2))
-
-    // Not as efficient as above
-    // orders join order_items -> 364 * 1000
-    // join with products and get date, product_name, order_item_subtotal -> 364 * 1000
-    // compute revenue per day per product -> 364 * 100
-    // get top n products per day -> 364 * 5
-    // date, product_name and revenue
-
-
-
+    // Save the files using "coalesce" to minimize the shuffle.
+   val outputBaseDir = envProps.getString("output.base.dir")
+   val result = df.select(filterColumns.map(c => col(c)): _*)   
+        
+           result.coalesce(1).saveAsTextFile("output.base.dir")
   }
-
 }
+
+ 
